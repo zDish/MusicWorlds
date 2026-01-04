@@ -14,9 +14,12 @@ let currentSong = null;
 const getHeaders = () => {
     if (!HR_API_KEY) {
         console.error("CRITICAL: HR_API_KEY is missing! Check your Railway variables.");
+        return {};
     }
+    // Ensure no whitespace and use Bearer token (Standard for Worlds API)
+    const cleanKey = HR_API_KEY.trim();
     return {
-        'highrise-api-key': HR_API_KEY,
+        'Authorization': `Bearer ${cleanKey}`,
         'Content-Type': 'application/json'
     };
 };
@@ -85,6 +88,11 @@ async function resolveSong(query) {
 // Main Loop
 async function main() {
     console.log("Highrise Music Bot Started...");
+    if (HR_API_KEY) {
+        console.log(`API Key loaded (Length: ${HR_API_KEY.length}). First 4 chars: ${HR_API_KEY.substring(0, 4)}...`);
+    } else {
+        console.error("API Key NOT loaded.");
+    }
     
     while (true) {
         try {
