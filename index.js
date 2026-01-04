@@ -11,31 +11,47 @@ let isPlaying = false;
 let currentSong = null;
 
 // Helper: Headers for Highrise API
-const getHeaders = () => ({
-    'Authorization': `Bearer ${HR_API_KEY}`,
-    'Content-Type': 'application/json'
-});
+const getHeaders = () => {
+    if (!HR_API_KEY) {
+        console.error("CRITICAL: HR_API_KEY is missing! Check your Railway variables.");
+    }
+    return {
+        'highrise-api-key': HR_API_KEY,
+        'Content-Type': 'application/json'
+    };
+};
 
 // Helper: Delay
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // 1. Fetch Storage (Inbox & Queue)
 async function fetchStorage() {
-    try {
-        // Fetch Inbox
-        const inboxRes = await axios.get(`${API_BASE}/storage/object/bot_inbox`, { headers: getHeaders() });
-        const queueRes = await axios.get(`${API_BASE}/storage/object/music_queue`, { headers: getHeaders() });
-        
-        return {
-            bot_inbox: inboxRes.data.value,
-            music_queue: queueRes.data.value
-        };
-    } catch (error) {
-        // 404 means key doesn't exist yet, which is fine
-        if (error.response && error.response.status === 404) return {};
-        console.error("Error fetching storage:", error.message);
-        return null;
+    const result = {};
+    
+    // Helper to fetch a single key safely
+    const fetchKey = async (key) => {
+        try {
+            const res = await axios.get(`${API_BASE}/storage/object/${key}`, { headers: getHeaders() });
+            return res.data.value;
+        } catch (error) {
+            if (error.response && error.response.status === 404) {
+                // Key doesn't exist yet
+                return null;
+            }
+            console.error(`Error fetching ${key}:`, error.message);
+            return null;
+        }
+    };
+
+    result.bot_inbox = await fetchKey('bot_inbox');
+    result.music_queue = await fetchKey('music_queue');
+    
+    // Debug log every 10 polls (approx 30s) to show it's alive
+    if (Math.random() < 0.1) {
+        console.log("Polling... Inbox:", result.bot_inbox ? "Found" : "Empty", "Queue:", result.music_queue ? "Found" : "Empty");
     }
+
+    return result;
 }
 
 // 2. Write to Storage
