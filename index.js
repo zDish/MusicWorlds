@@ -50,9 +50,9 @@ async function fetchStorage() {
     result.music_queue = await fetchKey('music_queue');
     
     // Debug log every 10 polls (approx 30s) to show it's alive
-    if (Math.random() < 0.1) {
+    // if (Math.random() < 0.1) {
         console.log("Polling... Inbox:", result.bot_inbox ? "Found" : "Empty", "Queue:", result.music_queue ? "Found" : "Empty");
-    }
+    // }
 
     return result;
 }
@@ -85,6 +85,27 @@ async function resolveSong(query) {
     };
 }
 
+// 4. Fetch Game Logs (Debug)
+async function fetchGameLogs() {
+    try {
+        const res = await axios.get(`${API_BASE}/management/logs?limit=5`, { headers: getHeaders() });
+        if (res.data && res.data.values && res.data.values.length > 0) {
+            console.log("--- Recent Game Logs ---");
+            res.data.values.forEach(log => {
+                console.log(`[${log.created_at}] ${log.message}`);
+            });
+            console.log("------------------------");
+        }
+    } catch (error) {
+        // 403/401 means key doesn't have permission, which is fine, just ignore
+        if (error.response && (error.response.status === 403 || error.response.status === 401)) {
+            console.warn("Log fetch failed: Invalid permissions (Check API Key scopes)");
+        } else {
+            console.error("Error fetching logs:", error.message);
+        }
+    }
+}
+
 // Main Loop
 async function main() {
     console.log("Highrise Music Bot Started...");
@@ -96,6 +117,9 @@ async function main() {
     
     while (true) {
         try {
+            // Fetch logs to see if the game server is running/printing
+            await fetchGameLogs();
+
             const storage = await fetchStorage();
             
             if (storage) {
