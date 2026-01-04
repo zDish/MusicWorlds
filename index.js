@@ -61,16 +61,24 @@ async function fetchStorage() {
 async function updateStorage(key, value, version) {
     try {
         const payload = {
-            value: typeof value === 'string' ? value : JSON.stringify(value),
-            version: version
+            value: typeof value === 'string' ? value : JSON.stringify(value)
         };
+        
+        // Only include version if it's defined. 
+        // If version is null/undefined, we omit it (treated as new object or force overwrite if API allows).
+        if (version) {
+            payload.version = version;
+        }
+
+        // console.log(`[DEBUG] Updating ${key} with version: ${version}`);
         
         const res = await axios.put(`${API_BASE}/storage/object/${key}`, payload, { headers: getHeaders() });
         return res.data; // Returns updated object with new version
     } catch (error) {
         console.error(`Error updating storage (${key}):`, error.message);
         if (error.response) {
-            console.error("Response data:", JSON.stringify(error.response.data));
+            console.error("Response Status:", error.response.status);
+            console.error("Response Data:", JSON.stringify(error.response.data));
         }
         throw error;
     }
@@ -91,6 +99,7 @@ async function resolveSong(query) {
 
 // 4. Fetch Game Logs (Debug)
 async function fetchGameLogs() {
+    // ... (Function body omitted for brevity, but kept in file)
     try {
         const res = await axios.get(`${API_BASE}/management/logs?limit=5`, { headers: getHeaders() });
         if (res.data && res.data.values && res.data.values.length > 0) {
@@ -136,7 +145,7 @@ async function main() {
     while (true) {
         try {
             // Fetch logs to see if the game server is running/printing
-            await fetchGameLogs();
+            // await fetchGameLogs(); // Commented out to reduce noise/errors
 
             const storage = await fetchStorage();
             
@@ -166,7 +175,7 @@ async function main() {
                         
                         // Update Queue in Game
                         // Use the version from the fetch we just did
-                        let queueVersion = storage.music_queue ? storage.music_queue.version : null;
+                        let queueVersion = storage.music_queue ? storage.music_queue.version : undefined;
                         
                         const newQueueObj = await updateStorage("music_queue", musicQueue, queueVersion);
                         
@@ -197,7 +206,7 @@ async function main() {
                     console.log(`Now Playing: ${currentSong.title}`);
                     
                     // Update Storage (Queue without the song)
-                    let queueVersion = storage.music_queue ? storage.music_queue.version : null;
+                    let queueVersion = storage.music_queue ? storage.music_queue.version : undefined;
                     
                     try {
                         await updateStorage("music_queue", musicQueue, queueVersion);
