@@ -9,6 +9,7 @@ const API_BASE = "https://api.worlds.highrise.game/api";
 let musicQueue = [];
 let isPlaying = false;
 let currentSong = null;
+let playingUntil = 0; // Timestamp when current song ends
 
 // Helper: Headers for Highrise API
 const getHeaders = () => {
@@ -158,18 +159,43 @@ async function main() {
                 const inboxVersion = (inboxData && inboxData.metadata) ? inboxData.metadata.version : null;
 
                 if (inboxValue && inboxValue !== "") {
-                    console.log("New Request found in Inbox:", inboxValue);
+                    console.log("Raw Inbox Value:", inboxValue);
                     
                     try {
-                        const request = JSON.parse(inboxValue);
+                        let request;
+                        if (typeof inboxValue === 'string') {
+                             // Handle potential double-encoding or just parse
+                             try {
+                                request = JSON.parse(inboxValue);
+                             } catch (parseErr) {
+                                 console.error("JSON Parse Error:", parseErr.message);
+                                 // Fallback: maybe it's not JSON?
+                                 request = { query: inboxValue, user: "Unknown", userid: "" };
+                             }
+                        } else {
+                             request = inboxValue;
+                        }
+                        
+                        if (typeof request === 'string') {
+                            // Double encoded?
+                            try {
+                                request = JSON.parse(request);
+                            } catch (e) {
+                                // It's just a string
+                                request = { query: request, user: "Unknown", userid: "" };
+                            }
+                        }
+
+                        console.log("Parsed Request:", JSON.stringify(request));
                         
                         // Clear Inbox immediately
                         await updateStorage("bot_inbox", "", inboxVersion);
                         
                         // Resolve Song
-                        const songInfo = await resolveSong(request.query);
-                        songInfo.user = request.user;
-                        songInfo.userid = request.userid;
+                        const query = request.query || request; // Fallback if structure is different
+                        const songInfo = await resolveSong(query);
+                        songInfo.user = request.user || "Unknown";
+                        songInfo.userid = request.userid || "";
                         
                         // Add to Queue
                         musicQueue.push(songInfo);
@@ -181,14 +207,11 @@ async function main() {
                         
                         const newQueueObj = await updateStorage("music_queue", musicQueue, queueVersion);
                         
-                        // Update local storage reference in case we need it again in this loop
+                        // Update local storage reference
                         if (storage.music_queue) {
                             if (!storage.music_queue.metadata) storage.music_queue.metadata = {};
-                            storage.music_queue.metadata.version = newQueueObj.version; // API returns flat version or nested? Docs say flat in response?
-                            // Wait, PUT response schema: { created_at, updated_at, version }
-                            // So newQueueObj.version is correct.
+                            storage.music_queue.metadata.version = newQueueObj.version;
                         } else {
-                            // If it didn't exist, create structure
                             storage.music_queue = { metadata: { version: newQueueObj.version } };
                         }
                         
@@ -204,33 +227,43 @@ async function main() {
                 }
                 
                 // --- PLAYBACK LOGIC ---
-                if (!isPlaying && musicQueue.length > 0) {
-                    // Play next song
-                    currentSong = musicQueue.shift();
-                    isPlaying = true;
+                const now = Date.now();
+                
+                // Check if song finished
+                if (isPlaying && now >= playingUntil) {
+                    console.log("Song finished:", currentSong ? currentSong.title : "Unknown");
+                    isPlaying = false;
+                    currentSong = null;
                     
-                    console.log(`Now Playing: ${currentSong.title}`);
+                    // Remove the finished song from the queue
+                    musicQueue.shift();
                     
-                    // Update Storage (Queue without the song)
+                    // Update Storage
                     let queueVersion = (storage.music_queue && storage.music_queue.metadata) ? storage.music_queue.metadata.version : undefined;
-                    
                     try {
                         const newQueueObj = await updateStorage("music_queue", musicQueue, queueVersion);
                         // Update local version
-                         if (storage.music_queue) {
+                        if (storage.music_queue) {
                             if (!storage.music_queue.metadata) storage.music_queue.metadata = {};
                             storage.music_queue.metadata.version = newQueueObj.version;
                         }
                     } catch (updateErr) {
-                        console.error("Failed to update queue for playback:", updateErr.message);
+                        console.error("Failed to update queue after song finish:", updateErr.message);
                     }
+                }
+
+                // Start playing next song if idle
+                if (!isPlaying && musicQueue.length > 0) {
+                    // Peek next song (keep it in queue so clients see it)
+                    currentSong = musicQueue[0];
+                    isPlaying = true;
+                    playingUntil = now + (currentSong.duration * 1000);
                     
-                    // Handle Song Finish
-                    setTimeout(() => {
-                        console.log("Song finished.");
-                        isPlaying = false;
-                        currentSong = null;
-                    }, currentSong.duration * 1000);
+                    console.log(`Now Playing: ${currentSong.title} (Ends in ${currentSong.duration}s)`);
+                    
+                    // We don't strictly need to update storage here if the queue content hasn't changed.
+                    // But if we want to add "status: playing" metadata, we would update here.
+                    // For now, let's just leave it. The client assumes the first song is playing.
                 }
             }
             
