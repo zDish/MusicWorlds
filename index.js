@@ -35,7 +35,7 @@ async function fetchStorage() {
     const fetchKey = async (key) => {
         try {
             const res = await axios.get(`${API_BASE}/storage/object/${key}`, { headers: getHeaders() });
-            return res.data.value;
+            return res.data; // Returns { key, value, version, ... }
         } catch (error) {
             if (error.response && error.response.status === 404) {
                 // Key doesn't exist yet
@@ -50,25 +50,29 @@ async function fetchStorage() {
     result.music_queue = await fetchKey('music_queue');
     
     // Debug log every 10 polls (approx 30s) to show it's alive
-    // if (Math.random() < 0.1) {
+    if (Math.random() < 0.1) {
         console.log("Polling... Inbox:", result.bot_inbox ? "Found" : "Empty", "Queue:", result.music_queue ? "Found" : "Empty");
-    // }
+    }
 
     return result;
 }
 
 // 2. Write to Storage
-async function updateStorage(key, value) {
+async function updateStorage(key, value, version) {
     try {
         const payload = {
             value: typeof value === 'string' ? value : JSON.stringify(value),
-            version: undefined // Optional: Handle versioning if needed
+            version: version
         };
         
-        await axios.put(`${API_BASE}/storage/object/${key}`, payload, { headers: getHeaders() });
-        // console.log(`Updated storage: ${key}`);
+        const res = await axios.put(`${API_BASE}/storage/object/${key}`, payload, { headers: getHeaders() });
+        return res.data; // Returns updated object with new version
     } catch (error) {
         console.error(`Error updating storage (${key}):`, error.message);
+        if (error.response) {
+            console.error("Response data:", JSON.stringify(error.response.data));
+        }
+        throw error;
     }
 }
 
@@ -115,6 +119,20 @@ async function main() {
         console.error("API Key NOT loaded.");
     }
     
+    // Initial Load of Queue
+    try {
+        const initialStorage = await fetchStorage();
+        if (initialStorage && initialStorage.music_queue && initialStorage.music_queue.value) {
+            const storedQueue = JSON.parse(initialStorage.music_queue.value);
+            if (Array.isArray(storedQueue)) {
+                musicQueue = storedQueue;
+                console.log(`Restored ${musicQueue.length} songs from storage.`);
+            }
+        }
+    } catch (e) {
+        console.error("Error restoring queue:", e);
+    }
+    
     while (true) {
         try {
             // Fetch logs to see if the game server is running/printing
@@ -124,14 +142,18 @@ async function main() {
             
             if (storage) {
                 // --- CHECK INBOX ---
-                if (storage.bot_inbox && storage.bot_inbox !== "") {
-                    console.log("New Request found in Inbox:", storage.bot_inbox);
+                const inboxData = storage.bot_inbox;
+                const inboxValue = inboxData ? inboxData.value : "";
+                const inboxVersion = inboxData ? inboxData.version : null;
+
+                if (inboxValue && inboxValue !== "") {
+                    console.log("New Request found in Inbox:", inboxValue);
                     
                     try {
-                        const request = JSON.parse(storage.bot_inbox);
+                        const request = JSON.parse(inboxValue);
                         
                         // Clear Inbox immediately
-                        await updateStorage("bot_inbox", "");
+                        await updateStorage("bot_inbox", "", inboxVersion);
                         
                         // Resolve Song
                         const songInfo = await resolveSong(request.query);
@@ -143,11 +165,26 @@ async function main() {
                         console.log(`Added to queue: ${songInfo.title}`);
                         
                         // Update Queue in Game
-                        await updateStorage("music_queue", musicQueue);
+                        // Use the version from the fetch we just did
+                        let queueVersion = storage.music_queue ? storage.music_queue.version : null;
+                        
+                        const newQueueObj = await updateStorage("music_queue", musicQueue, queueVersion);
+                        
+                        // Update local storage reference in case we need it again in this loop
+                        if (storage.music_queue) {
+                            storage.music_queue.version = newQueueObj.version;
+                        } else {
+                            storage.music_queue = newQueueObj;
+                        }
                         
                     } catch (e) {
                         console.error("Failed to process inbox:", e);
-                        await updateStorage("bot_inbox", ""); // Clear bad data
+                        // Try to clear bad data
+                        try {
+                            await updateStorage("bot_inbox", "", inboxVersion);
+                        } catch (clearErr) {
+                            console.error("Failed to clear inbox:", clearErr.message);
+                        }
                     }
                 }
                 
@@ -159,45 +196,26 @@ async function main() {
                     
                     console.log(`Now Playing: ${currentSong.title}`);
                     
-                    // Update Game State (Clients listen to this to play music)
-                    // We can reuse 'music_queue' or use a specific 'now_playing' key
-                    // For now, we just updated the queue (removed the song).
-                    // We should probably tell the game what to play.
+                    // Update Storage (Queue without the song)
+                    let queueVersion = storage.music_queue ? storage.music_queue.version : null;
                     
-                    // Let's put the "Now Playing" song back at the top of the queue or use a separate key?
-                    // The Lua script reads 'music_queue'. If we remove it, it disappears from UI.
-                    // Usually, "Now Playing" is index 1.
+                    try {
+                        await updateStorage("music_queue", musicQueue, queueVersion);
+                    } catch (updateErr) {
+                        console.error("Failed to update queue for playback:", updateErr.message);
+                    }
                     
-                    // Let's keep it simple: The top of the queue is playing.
-                    // We wait for the duration, then remove it.
-                    
-                    // Update Storage with new Queue (Current song is gone? No, keep it while playing)
-                    // Actually, let's keep it in the queue but mark it as playing?
-                    // Or just remove it when it's done.
-                    
-                    // REVISED: Pop immediately, but maybe send a "Now Playing" signal?
-                    // The Lua script just displays the list.
-                    // Let's just wait.
-                    
-                    setTimeout(async () => {
+                    // Handle Song Finish
+                    setTimeout(() => {
                         console.log("Song finished.");
                         isPlaying = false;
                         currentSong = null;
-                        // Update storage again (if we kept it in queue, remove it now)
-                        // For this simple version, we popped it already.
-                        await updateStorage("music_queue", musicQueue);
                     }, currentSong.duration * 1000);
-                    
-                    // Update Storage (Queue without the song? Or with it?)
-                    // If we pop it, it disappears from UI.
-                    // Let's add it back as "Playing" or just handle it.
-                    // For now: Popped.
-                    await updateStorage("music_queue", musicQueue);
                 }
             }
             
         } catch (err) {
-            console.error("Main loop error:", err);
+            console.error("Main loop error:", err.message);
         }
         
         await sleep(3000); // Poll every 3 seconds
