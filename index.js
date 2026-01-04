@@ -58,10 +58,11 @@ async function fetchStorage() {
 }
 
 // 2. Write to Storage
-async function updateStorage(key, value, version) {
+async function updateStorage(key, value, version, attributes = []) {
     try {
         const payload = {
-            value: typeof value === 'string' ? value : JSON.stringify(value)
+            value: typeof value === 'string' ? value : JSON.stringify(value),
+            attributes: attributes // Required by Highrise API
         };
         
         // Only include version if it's defined. 
@@ -153,7 +154,8 @@ async function main() {
                 // --- CHECK INBOX ---
                 const inboxData = storage.bot_inbox;
                 const inboxValue = inboxData ? inboxData.value : "";
-                const inboxVersion = inboxData ? inboxData.version : null;
+                // Version is nested in metadata
+                const inboxVersion = (inboxData && inboxData.metadata) ? inboxData.metadata.version : null;
 
                 if (inboxValue && inboxValue !== "") {
                     console.log("New Request found in Inbox:", inboxValue);
@@ -175,15 +177,19 @@ async function main() {
                         
                         // Update Queue in Game
                         // Use the version from the fetch we just did
-                        let queueVersion = storage.music_queue ? storage.music_queue.version : undefined;
+                        let queueVersion = (storage.music_queue && storage.music_queue.metadata) ? storage.music_queue.metadata.version : undefined;
                         
                         const newQueueObj = await updateStorage("music_queue", musicQueue, queueVersion);
                         
                         // Update local storage reference in case we need it again in this loop
                         if (storage.music_queue) {
-                            storage.music_queue.version = newQueueObj.version;
+                            if (!storage.music_queue.metadata) storage.music_queue.metadata = {};
+                            storage.music_queue.metadata.version = newQueueObj.version; // API returns flat version or nested? Docs say flat in response?
+                            // Wait, PUT response schema: { created_at, updated_at, version }
+                            // So newQueueObj.version is correct.
                         } else {
-                            storage.music_queue = newQueueObj;
+                            // If it didn't exist, create structure
+                            storage.music_queue = { metadata: { version: newQueueObj.version } };
                         }
                         
                     } catch (e) {
@@ -206,10 +212,15 @@ async function main() {
                     console.log(`Now Playing: ${currentSong.title}`);
                     
                     // Update Storage (Queue without the song)
-                    let queueVersion = storage.music_queue ? storage.music_queue.version : undefined;
+                    let queueVersion = (storage.music_queue && storage.music_queue.metadata) ? storage.music_queue.metadata.version : undefined;
                     
                     try {
-                        await updateStorage("music_queue", musicQueue, queueVersion);
+                        const newQueueObj = await updateStorage("music_queue", musicQueue, queueVersion);
+                        // Update local version
+                         if (storage.music_queue) {
+                            if (!storage.music_queue.metadata) storage.music_queue.metadata = {};
+                            storage.music_queue.metadata.version = newQueueObj.version;
+                        }
                     } catch (updateErr) {
                         console.error("Failed to update queue for playback:", updateErr.message);
                     }
