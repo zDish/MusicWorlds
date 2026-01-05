@@ -92,8 +92,8 @@ def sync_queue():
 def fetch_logs():
     try:
         # Fetch recent logs
-        # limit=20 is usually enough for polling every few seconds
-        response = requests.get(f"{API_BASE}/management/logs?limit=20", headers=HEADERS, timeout=10)
+        # Increased limit to 50 to catch logs during high traffic
+        response = requests.get(f"{API_BASE}/management/logs?limit=50", headers=HEADERS, timeout=10)
         
         if response.status_code == 429:
             print("Rate limited (429). Waiting 10 seconds...")
@@ -119,23 +119,23 @@ def process_logs():
     if not logs:
         return
 
+    # Debug: Print the newest log to verify connectivity
+    # (Only print if it's different from the last one we saw to avoid spam)
+    newest_log = logs[0]
+    newest_id = newest_log.get("id") or newest_log.get("timestamp") or newest_log.get("created_at")
+    
     # Logs usually come newest first.
     # If this is the first run, we don't want to process old logs (history).
     # We just mark the latest log as the starting point.
     if last_processed_id is None:
-        # Assuming logs[0] is the newest (standard API behavior)
-        # We need to find the absolute latest ID in this batch
-        latest_log = logs[0]
-        # Try multiple common fields for ID/Time
-        last_processed_id = latest_log.get("id") or latest_log.get("timestamp") or latest_log.get("created_at")
+        last_processed_id = newest_id
         
         if last_processed_id is None:
-            print(f"DEBUG: Could not find ID in log entry. Keys: {list(latest_log.keys())}")
-            # If we can't find an ID, we can't track state. 
-            # We'll just return and try again next loop, hoping for a better log or user intervention.
+            print(f"DEBUG: Could not find ID in log entry. Keys: {list(newest_log.keys())}")
             return
         
-        print(f"Bridge initialized. Last Log ID: {last_processed_id}. Waiting for new commands...")
+        print(f"Bridge initialized. Last Log ID: {last_processed_id}")
+        print(f"DEBUG: Newest Log Message: {newest_log.get('message')}")
         return
 
     # If we have a last_processed_id, we process only newer logs.
@@ -155,6 +155,9 @@ def process_logs():
             continue
             
         message = log.get("message", "")
+        
+        # Debug: Print all new messages to see what we are receiving
+        print(f"DEBUG: Processing Log: {message}")
         
         # Look for our specific pattern from Lua: "!play <song> | <user> | <userid>"
         if message.startswith("!play "):
