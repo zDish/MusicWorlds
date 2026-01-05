@@ -50,29 +50,44 @@ def update_storage(key, value, version):
     try:
         # Wrap in Lua string block to prevent parsing errors
         # Format: [[ { "q": [...] } ]]
-        # We removed 'return' because Highrise parses this as an expression, not a statement.
         json_val = json.dumps(value)
         payload_str = f"[[{json_val}]]"
         
+        # 'attributes' is REQUIRED by the API, even if empty.
         payload = {
-            "value": payload_str
+            "value": payload_str,
+            "attributes": []
         }
         
         # Only include version if we have it. 
-        # Sending 'null' can cause 400 Bad Request.
         if version is not None:
-            payload["version"] = version
+            payload["version"] = int(version)
             
+        print(f"DEBUG: Updating {key} (v{version})...")
         res = requests.put(f"{API_BASE}/storage/object/{key}", json=payload, headers=HEADERS, timeout=10)
+        
         if res.status_code == 200:
-            # The response for PUT returns the metadata directly (created_at, updated_at, version)
-            # according to some docs, OR it returns the full object.
-            # Let's safely check for version in both places.
             resp_data = res.json()
             if "version" in resp_data:
                 return resp_data["version"]
             elif "metadata" in resp_data and "version" in resp_data["metadata"]:
                 return resp_data["metadata"]["version"]
+            return None
+        elif res.status_code == 400:
+            print(f"Failed to update storage {key}: 400 - {res.text}")
+            # Retry without version in case of mismatch/bad request related to version
+            if version is not None:
+                print("Retrying update without version...")
+                del payload["version"]
+                res2 = requests.put(f"{API_BASE}/storage/object/{key}", json=payload, headers=HEADERS, timeout=10)
+                if res2.status_code == 200:
+                    print("Retry successful!")
+                    resp_data = res2.json()
+                    if "version" in resp_data: return resp_data["version"]
+                    if "metadata" in resp_data: return resp_data["metadata"]["version"]
+                    return None
+                else:
+                    print(f"Retry failed: {res2.status_code} - {res2.text}")
             return None
         else:
             print(f"Failed to update storage {key}: {res.status_code} - {res.text}")
