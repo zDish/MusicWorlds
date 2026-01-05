@@ -49,12 +49,25 @@ def update_storage(key, value, version):
         
         payload = {
             "value": payload_str,
-            "version": version,
             "attributes": []
         }
+        
+        # Only include version if we have it. 
+        # Sending 'null' can cause 400 Bad Request.
+        if version is not None:
+            payload["version"] = version
+            
         res = requests.put(f"{API_BASE}/storage/object/{key}", json=payload, headers=HEADERS, timeout=10)
         if res.status_code == 200:
-            return res.json().get("version")
+            # The response for PUT returns the metadata directly (created_at, updated_at, version)
+            # according to some docs, OR it returns the full object.
+            # Let's safely check for version in both places.
+            resp_data = res.json()
+            if "version" in resp_data:
+                return resp_data["version"]
+            elif "metadata" in resp_data and "version" in resp_data["metadata"]:
+                return resp_data["metadata"]["version"]
+            return None
         else:
             print(f"Failed to update storage {key}: {res.status_code} - {res.text}")
             return None
@@ -66,7 +79,11 @@ def sync_queue():
     global music_queue, queue_version
     data = fetch_storage("music_queue")
     if data:
-        queue_version = data.get("version")
+        # Version is nested in metadata in the GET response
+        # Structure: { "key": "...", "value": "...", "metadata": { "version": 1, ... } }
+        meta = data.get("metadata", {})
+        queue_version = meta.get("version")
+        
         raw_val = data.get("value")
         
         # Unwrap Lua string block: return [[...]]
@@ -257,20 +274,3 @@ def main():
     # FORCE CLEANUP: Overwrite storage with correct format to stop Lua errors
     # The current errors in logs ([string "music_queue"]:1: Expected '}') mean the storage 
     # has raw JSON instead of the Lua wrapper. We must overwrite it to fix the game server.
-    print("Sanitizing storage to ensure correct format...")
-    global queue_version
-    # Even if queue is empty, we write it back wrapped in return [[...]]
-    new_ver = update_storage("music_queue", {"q": music_queue}, queue_version)
-    if new_ver:
-        queue_version = new_ver
-        print("Storage sanitized successfully. Lua errors should stop.")
-    else:
-        print("Warning: Failed to sanitize storage.")
-    
-    while True:
-        process_logs()
-        manage_playback()
-        time.sleep(3) # Poll every 3 seconds
-
-if __name__ == "__main__":
-    main()
