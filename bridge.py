@@ -1,9 +1,15 @@
 import os
+import sys
 import time
 import json
 import requests
 import urllib.parse
 from dotenv import load_dotenv
+
+# Force unbuffered output for Railway logs
+sys.stdout.reconfigure(line_buffering=True)
+
+print("Initializing Bridge Script...")
 
 # Load environment variables
 load_dotenv()
@@ -274,3 +280,27 @@ def main():
     # FORCE CLEANUP: Overwrite storage with correct format to stop Lua errors
     # The current errors in logs ([string "music_queue"]:1: Expected '}') mean the storage 
     # has raw JSON instead of the Lua wrapper. We must overwrite it to fix the game server.
+    print("Sanitizing storage to ensure correct format...")
+    global queue_version
+    # Even if queue is empty, we write it back wrapped in return [[...]]
+    new_ver = update_storage("music_queue", {"q": music_queue}, queue_version)
+    if new_ver:
+        queue_version = new_ver
+        print("Storage sanitized successfully. Lua errors should stop.")
+    else:
+        print("Warning: Failed to sanitize storage.")
+    
+    while True:
+        process_logs()
+        manage_playback()
+        time.sleep(3) # Poll every 3 seconds
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as e:
+        print(f"CRITICAL ERROR: {e}")
+        import traceback
+        traceback.print_exc()
+        # Sleep to prevent rapid restart loops if it crashes immediately
+        time.sleep(10)
