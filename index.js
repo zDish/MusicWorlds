@@ -53,7 +53,15 @@ async function fetchStorage() {
     result.bot_inbox_version = inboxData ? inboxData.version : null;
     
     try {
-        result.music_queue = queueData ? JSON.parse(queueData.value) : null;
+        let rawVal = queueData ? queueData.value : null;
+        // Handle Lua-wrapped JSON (return [[...]])
+        if (rawVal && typeof rawVal === 'string' && rawVal.startsWith("return [[")) {
+             const match = rawVal.match(/return \[\[([\s\S]*)\]\]/);
+             if (match) {
+                 rawVal = match[1];
+             }
+        }
+        result.music_queue = rawVal ? JSON.parse(rawVal) : null;
     } catch (e) {
         result.music_queue = null;
     }
@@ -183,8 +191,9 @@ async function main() {
                             console.log(`Added to queue: ${songInfo.title}`);
                             
                             // Update Queue in Game
-                            // Wrap in object to prevent Highrise from trying to parse as Lua array
-                            const newVer = await updateStorage("music_queue", { q: musicQueue }, queueVersion);
+                            // Wrap in Lua string block to prevent parsing errors
+                            const payloadStr = `return [[${JSON.stringify({ q: musicQueue })}]]`;
+                            const newVer = await updateStorage("music_queue", payloadStr, queueVersion);
                             if (newVer) queueVersion = newVer;
                         }
                         
@@ -209,8 +218,9 @@ async function main() {
                         currentSong = null;
                         
                         // Update Storage
-                        // Wrap in object to prevent Highrise from trying to parse as Lua array
-                        await updateStorage("music_queue", { q: musicQueue }, queueVersion);
+                        // Wrap in Lua string block to prevent parsing errors
+                        const payloadStr = `return [[${JSON.stringify({ q: musicQueue })}]]`;
+                        await updateStorage("music_queue", payloadStr, queueVersion);
                     }
                 } else {
                     // Not playing, check if we should start
