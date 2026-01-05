@@ -136,7 +136,7 @@ def fetch_logs():
         return []
 
 def process_logs():
-    global last_processed_id
+    global last_processed_id, queue_version, music_queue
     
     logs = fetch_logs()
     if not logs:
@@ -221,7 +221,10 @@ def process_logs():
                                     "user": user,
                                     "userid": userid,
                                     "duration": 30, # Mock duration or get from VPS
-                                    "url": "http://46.224.123.14:8000/radio"
+                                    "url": "http://46.224.123.14:8000/radio",
+                                    # Highrise Avatar Thumbnail
+                                    # This is a standard URL pattern for Highrise avatars
+                                    "thumbnail": f"https://web-api.highrise.game/users/{userid}/profile_pic"
                                 }
                                 
                                 # Try to parse VPS response for real info
@@ -230,6 +233,10 @@ def process_logs():
                                     if vps_data:
                                         if "title" in vps_data: song_info["title"] = vps_data["title"]
                                         if "duration" in vps_data: song_info["duration"] = vps_data["duration"]
+                                        # If VPS provides song art, we could use that instead?
+                                        # But user asked for "their thumbnail" (user's) AND "song they requested" (title)
+                                        # If you want song art, check if vps_data has 'thumbnail' or 'art'
+                                        if "thumbnail" in vps_data: song_info["song_art"] = vps_data["thumbnail"]
                                 except:
                                     pass
                                     
