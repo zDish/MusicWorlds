@@ -1,5 +1,6 @@
 import os
 import time
+import json
 import requests
 import urllib.parse
 from dotenv import load_dotenv
@@ -23,8 +24,70 @@ HEADERS = {
 }
 
 # State
-# In a real production env, store this in a file or DB to persist across restarts.
 last_processed_id = None 
+music_queue = []
+is_playing = False
+playing_until = 0
+queue_version = None
+
+def fetch_storage(key):
+    try:
+        res = requests.get(f"{API_BASE}/storage/object/{key}", headers=HEADERS, timeout=10)
+        if res.status_code == 404: return None
+        if res.status_code == 200: return res.json()
+        return None
+    except Exception as e:
+        print(f"Error fetching storage {key}: {e}")
+        return None
+
+def update_storage(key, value, version):
+    try:
+        # Wrap in Lua string block to prevent parsing errors
+        # Format: return [[ { "q": [...] } ]]
+        json_val = json.dumps(value)
+        payload_str = f"return [[{json_val}]]"
+        
+        payload = {
+            "value": payload_str,
+            "version": version,
+            "attributes": []
+        }
+        res = requests.put(f"{API_BASE}/storage/object/{key}", json=payload, headers=HEADERS, timeout=10)
+        if res.status_code == 200:
+            return res.json().get("version")
+        else:
+            print(f"Failed to update storage {key}: {res.status_code} - {res.text}")
+            return None
+    except Exception as e:
+        print(f"Exception updating storage {key}: {e}")
+        return None
+
+def sync_queue():
+    global music_queue, queue_version
+    data = fetch_storage("music_queue")
+    if data:
+        queue_version = data.get("version")
+        raw_val = data.get("value")
+        
+        # Unwrap Lua string block: return [[...]]
+        if raw_val and isinstance(raw_val, str) and raw_val.startswith("return [["):
+            try:
+                # Extract content between [[ and ]]
+                # Simple parsing assuming no nested ]]
+                content = raw_val.replace("return [[", "").replace("]]", "")
+                parsed = json.loads(content)
+                if isinstance(parsed, dict) and "q" in parsed:
+                    music_queue = parsed["q"]
+                else:
+                    music_queue = []
+            except:
+                music_queue = []
+        else:
+            # Fallback for old format or empty
+            music_queue = []
+    else:
+        music_queue = []
+        queue_version = None
 
 def fetch_logs():
     try:
@@ -118,6 +181,34 @@ def process_logs():
                         
                         if vps_res.status_code == 200:
                             print("VPS accepted request.")
+                            
+                            # Add to Highrise Queue
+                            # We assume the VPS returns song info, or we mock it
+                            # For now, we create a song object
+                            song_info = {
+                                "title": raw_query, # Ideally get real title from VPS response
+                                "user": user,
+                                "userid": userid,
+                                "duration": 30, # Mock duration or get from VPS
+                                "url": "http://46.224.123.14:8000/radio"
+                            }
+                            
+                            # Try to parse VPS response for real info
+                            try:
+                                vps_data = vps_res.json()
+                                if vps_data:
+                                    if "title" in vps_data: song_info["title"] = vps_data["title"]
+                                    if "duration" in vps_data: song_info["duration"] = vps_data["duration"]
+                            except:
+                                pass
+                                
+                            music_queue.append(song_info)
+                            print(f"Added to queue: {song_info['title']}")
+                            
+                            # Update Storage
+                            new_ver = update_storage("music_queue", {"q": music_queue}, queue_version)
+                            if new_ver: queue_version = new_ver
+                            
                         else:
                             print(f"VPS Error: {vps_res.status_code} - {vps_res.text}")
                     except Exception as vps_e:
@@ -129,12 +220,40 @@ def process_logs():
         # Update last processed
         last_processed_id = current_id
 
+def manage_playback():
+    global is_playing, playing_until, current_song, music_queue, queue_version
+    
+    if is_playing:
+        if time.time() > playing_until:
+            print("Song finished.")
+            if music_queue:
+                music_queue.pop(0) # Remove finished song
+                
+                # Update Storage
+                new_ver = update_storage("music_queue", {"q": music_queue}, queue_version)
+                if new_ver: queue_version = new_ver
+            
+            is_playing = False
+    else:
+        if music_queue:
+            current_song = music_queue[0]
+            duration = current_song.get("duration", 30)
+            print(f"Now Playing: {current_song.get('title')} ({duration}s)")
+            
+            playing_until = time.time() + duration
+            is_playing = True
+
 def main():
     print("Starting Highrise-VPS Bridge (Python)...")
     print(f"Target VPS: {VPS_URL}")
     
+    # Initial Sync
+    sync_queue()
+    print(f"Queue synced. {len(music_queue)} songs.")
+    
     while True:
         process_logs()
+        manage_playback()
         time.sleep(3) # Poll every 3 seconds
 
 if __name__ == "__main__":
