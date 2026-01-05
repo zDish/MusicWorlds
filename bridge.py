@@ -254,6 +254,19 @@ def main():
     sync_queue()
     print(f"Queue synced. {len(music_queue)} songs.")
     
+    # FORCE CLEANUP: Overwrite storage with correct format to stop Lua errors
+    # The current errors in logs ([string "music_queue"]:1: Expected '}') mean the storage 
+    # has raw JSON instead of the Lua wrapper. We must overwrite it to fix the game server.
+    print("Sanitizing storage to ensure correct format...")
+    global queue_version
+    # Even if queue is empty, we write it back wrapped in return [[...]]
+    new_ver = update_storage("music_queue", {"q": music_queue}, queue_version)
+    if new_ver:
+        queue_version = new_ver
+        print("Storage sanitized successfully. Lua errors should stop.")
+    else:
+        print("Warning: Failed to sanitize storage.")
+    
     while True:
         process_logs()
         manage_playback()
