@@ -63,7 +63,15 @@ def process_logs():
         # Assuming logs[0] is the newest (standard API behavior)
         # We need to find the absolute latest ID in this batch
         latest_log = logs[0]
-        last_processed_id = latest_log.get("id") or latest_log.get("timestamp")
+        # Try multiple common fields for ID/Time
+        last_processed_id = latest_log.get("id") or latest_log.get("timestamp") or latest_log.get("created_at")
+        
+        if last_processed_id is None:
+            print(f"DEBUG: Could not find ID in log entry. Keys: {list(latest_log.keys())}")
+            # If we can't find an ID, we can't track state. 
+            # We'll just return and try again next loop, hoping for a better log or user intervention.
+            return
+        
         print(f"Bridge initialized. Last Log ID: {last_processed_id}. Waiting for new commands...")
         return
 
@@ -72,11 +80,15 @@ def process_logs():
     logs.reverse()
     
     for log in logs:
-        # Use 'id' if available, otherwise fallback to timestamp
-        current_id = log.get("id") or log.get("timestamp")
+        # Use 'id' if available, otherwise fallback to timestamp or created_at
+        current_id = log.get("id") or log.get("timestamp") or log.get("created_at")
         
+        if not current_id:
+            continue
+
         # Skip if already processed (or older)
-        if last_processed_id and current_id <= last_processed_id:
+        # Ensure we are comparing same types (strings vs strings)
+        if last_processed_id and str(current_id) <= str(last_processed_id):
             continue
             
         message = log.get("message", "")
