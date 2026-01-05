@@ -52,7 +52,11 @@ async function fetchStorage() {
     result.bot_inbox = inboxData ? inboxData.value : null;
     result.bot_inbox_version = inboxData ? inboxData.version : null;
     
-    result.music_queue = queueData ? queueData.value : null;
+    try {
+        result.music_queue = queueData ? JSON.parse(queueData.value) : null;
+    } catch (e) {
+        result.music_queue = null;
+    }
     result.music_queue_version = queueData ? queueData.version : null;
     
     // Debug log every 10 polls (approx 30s) to show it's alive
@@ -137,8 +141,14 @@ async function main() {
             
             if (storage) {
                 // Sync local queue with remote
-                if (storage.music_queue && Array.isArray(storage.music_queue)) {
-                    musicQueue = storage.music_queue;
+                if (storage.music_queue) {
+                    if (Array.isArray(storage.music_queue)) {
+                        musicQueue = storage.music_queue;
+                    } else if (storage.music_queue.q && Array.isArray(storage.music_queue.q)) {
+                        musicQueue = storage.music_queue.q;
+                    } else {
+                        musicQueue = [];
+                    }
                 } else {
                     musicQueue = [];
                 }
@@ -173,7 +183,8 @@ async function main() {
                             console.log(`Added to queue: ${songInfo.title}`);
                             
                             // Update Queue in Game
-                            const newVer = await updateStorage("music_queue", musicQueue, queueVersion);
+                            // Wrap in object to prevent Highrise from trying to parse as Lua array
+                            const newVer = await updateStorage("music_queue", { q: musicQueue }, queueVersion);
                             if (newVer) queueVersion = newVer;
                         }
                         
@@ -198,7 +209,8 @@ async function main() {
                         currentSong = null;
                         
                         // Update Storage
-                        await updateStorage("music_queue", musicQueue, queueVersion);
+                        // Wrap in object to prevent Highrise from trying to parse as Lua array
+                        await updateStorage("music_queue", { q: musicQueue }, queueVersion);
                     }
                 } else {
                     // Not playing, check if we should start
