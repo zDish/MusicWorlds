@@ -55,8 +55,7 @@ def update_storage(key, value, version):
         payload_str = f"[[{json_val}]]"
         
         payload = {
-            "value": payload_str,
-            "attributes": []
+            "value": payload_str
         }
         
         # Only include version if we have it. 
@@ -86,10 +85,15 @@ def sync_queue():
     global music_queue, queue_version
     data = fetch_storage("music_queue")
     if data:
-        # Version is nested in metadata in the GET response
-        # Structure: { "key": "...", "value": "...", "metadata": { "version": 1, ... } }
-        meta = data.get("metadata", {})
-        queue_version = meta.get("version")
+        # Version might be at top level or in metadata
+        if "version" in data:
+            queue_version = data["version"]
+        elif "metadata" in data and "version" in data["metadata"]:
+            queue_version = data["metadata"]["version"]
+        else:
+            queue_version = None
+            
+        print(f"DEBUG: Fetched storage. Version: {queue_version}")
         
         raw_val = data.get("value")
         
