@@ -49,9 +49,10 @@ def fetch_storage(key):
 def update_storage(key, value, version):
     try:
         # Wrap in Lua string block to prevent parsing errors
-        # Format: return [[ { "q": [...] } ]]
+        # Format: [[ { "q": [...] } ]]
+        # We removed 'return' because Highrise parses this as an expression, not a statement.
         json_val = json.dumps(value)
-        payload_str = f"return [[{json_val}]]"
+        payload_str = f"[[{json_val}]]"
         
         payload = {
             "value": payload_str,
@@ -92,12 +93,11 @@ def sync_queue():
         
         raw_val = data.get("value")
         
-        # Unwrap Lua string block: return [[...]]
-        if raw_val and isinstance(raw_val, str) and raw_val.startswith("return [["):
+        # Unwrap Lua string block: [[...]] or return [[...]]
+        if raw_val and isinstance(raw_val, str):
+            # Clean up Lua wrappers
+            content = raw_val.replace("return [[", "").replace("[[", "").replace("]]", "")
             try:
-                # Extract content between [[ and ]]
-                # Simple parsing assuming no nested ]]
-                content = raw_val.replace("return [[", "").replace("]]", "")
                 parsed = json.loads(content)
                 if isinstance(parsed, dict) and "q" in parsed:
                     music_queue = parsed["q"]
@@ -182,66 +182,71 @@ def process_logs():
         # Debug: Print all new messages to see what we are receiving
         print(f"DEBUG: Processing Log: {message}")
         
-        # Look for our specific pattern from Lua: "!play <song> | <user> | <userid>"
-        if message.startswith("!play "):
-            print(f"Found command: {message}")
+        # Handle multi-line logs (Highrise sometimes batches prints)
+        lines = message.split('\n')
+        for line in lines:
+            line = line.strip()
             
-            try:
-                # Parse: !play Song Name | User | UserID
-                parts = message.split("|")
-                if len(parts) >= 3:
-                    # !play Song Name -> remove "!play " prefix
-                    raw_query = parts[0].strip()[6:] 
-                    user = parts[1].strip()
-                    userid = parts[2].strip()
-                    
-                    # Send to VPS
-                    print(f"Forwarding to VPS: '{raw_query}' from {user}")
-                    
-                    try:
-                        vps_res = requests.get(
-                            f"{VPS_URL}",
-                            params={"q": raw_query, "user": user, "userid": userid},
-                            timeout=10
-                        )
+            # Look for our specific pattern from Lua: "!play <song> | <user> | <userid>"
+            if line.startswith("!play "):
+                print(f"Found command: {line}")
+                
+                try:
+                    # Parse: !play Song Name | User | UserID
+                    parts = line.split("|")
+                    if len(parts) >= 3:
+                        # !play Song Name -> remove "!play " prefix
+                        raw_query = parts[0].strip()[6:] 
+                        user = parts[1].strip()
+                        userid = parts[2].strip()
                         
-                        if vps_res.status_code == 200:
-                            print("VPS accepted request.")
+                        # Send to VPS
+                        print(f"Forwarding to VPS: '{raw_query}' from {user}")
+                        
+                        try:
+                            vps_res = requests.get(
+                                f"{VPS_URL}",
+                                params={"q": raw_query, "user": user, "userid": userid},
+                                timeout=10
+                            )
                             
-                            # Add to Highrise Queue
-                            # We assume the VPS returns song info, or we mock it
-                            # For now, we create a song object
-                            song_info = {
-                                "title": raw_query, # Ideally get real title from VPS response
-                                "user": user,
-                                "userid": userid,
-                                "duration": 30, # Mock duration or get from VPS
-                                "url": "http://46.224.123.14:8000/radio"
-                            }
-                            
-                            # Try to parse VPS response for real info
-                            try:
-                                vps_data = vps_res.json()
-                                if vps_data:
-                                    if "title" in vps_data: song_info["title"] = vps_data["title"]
-                                    if "duration" in vps_data: song_info["duration"] = vps_data["duration"]
-                            except:
-                                pass
+                            if vps_res.status_code == 200:
+                                print("VPS accepted request.")
                                 
-                            music_queue.append(song_info)
-                            print(f"Added to queue: {song_info['title']}")
+                                # Add to Highrise Queue
+                                # We assume the VPS returns song info, or we mock it
+                                # For now, we create a song object
+                                song_info = {
+                                    "title": raw_query, # Ideally get real title from VPS response
+                                    "user": user,
+                                    "userid": userid,
+                                    "duration": 30, # Mock duration or get from VPS
+                                    "url": "http://46.224.123.14:8000/radio"
+                                }
+                                
+                                # Try to parse VPS response for real info
+                                try:
+                                    vps_data = vps_res.json()
+                                    if vps_data:
+                                        if "title" in vps_data: song_info["title"] = vps_data["title"]
+                                        if "duration" in vps_data: song_info["duration"] = vps_data["duration"]
+                                except:
+                                    pass
+                                    
+                                music_queue.append(song_info)
+                                print(f"Added to queue: {song_info['title']}")
+                                
+                                # Update Storage
+                                new_ver = update_storage("music_queue", {"q": music_queue}, queue_version)
+                                if new_ver: queue_version = new_ver
+                                
+                            else:
+                                print(f"VPS Error: {vps_res.status_code} - {vps_res.text}")
+                        except Exception as vps_e:
+                            print(f"Failed to connect to VPS: {vps_e}")
                             
-                            # Update Storage
-                            new_ver = update_storage("music_queue", {"q": music_queue}, queue_version)
-                            if new_ver: queue_version = new_ver
-                            
-                        else:
-                            print(f"VPS Error: {vps_res.status_code} - {vps_res.text}")
-                    except Exception as vps_e:
-                        print(f"Failed to connect to VPS: {vps_e}")
-                        
-            except Exception as e:
-                print(f"Error processing log message '{message}': {e}")
+                except Exception as e:
+                    print(f"Error processing log message '{line}': {e}")
         
         # Update last processed
         last_processed_id = current_id
